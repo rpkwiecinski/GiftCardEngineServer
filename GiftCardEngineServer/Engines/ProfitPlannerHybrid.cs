@@ -18,6 +18,17 @@ namespace GiftCardBaskets.Engines
         private HybridEngineMemory _memory = new HybridEngineMemory();
         private readonly string _statsPath = "history/strategy_stats.json";
 
+        // --- Configurable RL parameters ---
+        private readonly int _iterations = 1500;                   // liczba powtórzeń (możesz zmienić przez konstruktor)
+        private readonly double _epsilonStart = 0.4;               // startowe epsilon (eksploracja)
+        private readonly double _epsilonDecay = 0.995;             // tempo zaniku epsilonu
+        private readonly double _epsilonMin = 0.01;                // minimum eksploracji
+        private readonly bool _useUcb1 = true;                     // tryb UCB1 (Upper Confidence Bound)
+        private readonly int _generations = 2;                     // ile pokoleń genetycznych generować
+        private readonly int _offspringPerGen = 12;                // ile dzieci/potomków na pokolenie
+        private readonly int _eliteTake = 7;                       // ile najlepszych koszyków zachować do genetyki
+        private readonly int _rollingWindow = 1000;                // rozmiar rolling window do statystyk
+
         public ProfitPlannerHybrid()
         {
             Directory.CreateDirectory("history");
@@ -32,8 +43,6 @@ namespace GiftCardBaskets.Engines
             int dailyLimit,
             CancellationToken ct = default)
         {
-            int seconds = 30;
-
             var strategies = new Func<List<Game>, CancellationToken, List<Basket>>[]
             {
                 BuildProfitBaskets,
@@ -75,35 +84,64 @@ namespace GiftCardBaskets.Engines
             var stratResults = new List<(int stratIdx, decimal profit, List<Basket> baskets)>();
             var runLog = new List<(DateTime ts, int stratIdx, decimal profit, decimal waste, int basketCount)>();
 
-            DateTime stopAt = DateTime.UtcNow.AddSeconds(seconds);
-
-            while (DateTime.UtcNow < stopAt && !ct.IsCancellationRequested)
+            // RL session, parametryzowana pętla
+            double epsilon = _epsilonStart;
+            for (int iter = 0; iter < _iterations && !ct.IsCancellationRequested; iter++)
             {
-                // --- RL: Epsilon-greedy strategy selection ---
-                double epsilon = 0.1;
+                // --- Epsilon decay (dynamiczna eksploracja/eksploatacja) ---
+                epsilon = Math.Max(_epsilonMin, _epsilonStart * Math.Pow(_epsilonDecay, iter));
+
                 int stratIdx;
-                if (rand.NextDouble() < epsilon)
+                if (_useUcb1)
                 {
-                    // Eksploracja
-                    stratIdx = rand.Next(stratCount);
-                }
-                else
-                {
-                    // Eksploatacja: najlepsza wg statystyk
+                    // --- UCB1 Selection ---
                     var allStats = _memory.GetAllStats();
-                    decimal bestAvg = decimal.MinValue;
+                    double totalRuns = allStats.Sum(x => (double)x.Value.Runs) + 1.0;
+                    double c = 2.0; // tunable
+                    double bestUcb = double.MinValue;
                     int bestIdx = 0;
                     for (int i = 0; i < stratCount; i++)
                     {
                         var name = stratNames[i];
-                        decimal avg = allStats.TryGetValue(name, out var stat) ? stat.AvgProfit : 0m;
-                        if (avg > bestAvg)
+                        var s = allStats.TryGetValue(name, out var stat) ? stat : null;
+                        double mean = s != null && s.Runs > 0 ? (double)s.AvgProfit : 0.0;
+                        double bonus = s != null && s.Runs > 0 ? c * Math.Sqrt(Math.Log(totalRuns) / s.Runs) : 1.0;
+                        double ucb = mean + bonus;
+                        if (rand.NextDouble() < epsilon) // eksploracja na siłę
+                            ucb += rand.NextDouble() * 2.0;
+                        if (ucb > bestUcb)
                         {
-                            bestAvg = avg;
+                            bestUcb = ucb;
                             bestIdx = i;
                         }
                     }
                     stratIdx = bestIdx;
+                }
+                else
+                {
+                    // --- Epsilon-greedy selection ---
+                    if (rand.NextDouble() < epsilon)
+                    {
+                        stratIdx = rand.Next(stratCount); // eksploracja
+                    }
+                    else
+                    {
+                        // eksploatacja: najlepsza wg statystyk
+                        var allStats = _memory.GetAllStats();
+                        decimal bestAvg = decimal.MinValue;
+                        int bestIdx = 0;
+                        for (int i = 0; i < stratCount; i++)
+                        {
+                            var name = stratNames[i];
+                            decimal avg = allStats.TryGetValue(name, out var stat) ? stat.AvgProfit : 0m;
+                            if (avg > bestAvg)
+                            {
+                                bestAvg = avg;
+                                bestIdx = i;
+                            }
+                        }
+                        stratIdx = bestIdx;
+                    }
                 }
 
                 stratUsage[stratIdx]++;
@@ -125,16 +163,16 @@ namespace GiftCardBaskets.Engines
                     best = baskets.Select(x => x.Clone()).ToList();
                 }
 
-                // RL: aktualizacja pamięci/statystyk
+                // RL: aktualizacja pamięci/statystyk (rolling window)
                 string strategy = stratNames[stratIdx];
                 bool success = profit > 0;
                 _memory.Update(strategy, profit, success);
+                _memory.TrimStats(_rollingWindow);
             }
 
             // Zapisz statystyki RL na końcu sesji
             _memory.Save(_statsPath);
 
-            // ... po RL while (DateTime.UtcNow < stopAt && !ct.IsCancellationRequested)
             Plan = BuildCalendar(best ?? new List<Basket>(), workers, dailyLimit);
             LogAdaptiveSessionResults(stratNames, stratUsage, runLog, bestProfit);
 
@@ -142,20 +180,23 @@ namespace GiftCardBaskets.Engines
             for (int i = 0; i < stratNames.Length; i++)
                 _localStrategyScores[stratNames[i]] = stratScore[i];
 
-            // -- EWOLUCJA: GENETYCZNE --
+            // --- Genetyka: kilka pokoleń i offspringów ---
+            var allElites = new List<Basket>();
             if (stratResults.Count > 0)
             {
-                var eliteBaskets = stratResults
+                allElites = stratResults
                     .OrderByDescending(x => x.profit)
-                    .Take(5)
+                    .Take(_eliteTake)
                     .SelectMany(x => x.baskets)
                     .Distinct()
-                    .Take(10)
+                    .Take(_eliteTake * 2)
                     .ToList();
+            }
 
-                var mutatedAndCrossed = EvolveBaskets(eliteBaskets, catalogue, rand, 10);
-
-                foreach (var mutant in mutatedAndCrossed)
+            for (int gen = 0; gen < _generations; gen++)
+            {
+                var mutants = EvolveBaskets(allElites, catalogue, rand, _offspringPerGen);
+                foreach (var mutant in mutants)
                 {
                     decimal mutantProfit = mutant.NetProfit;
                     decimal mutantWaste = mutant.WasteValueEur;
@@ -167,6 +208,8 @@ namespace GiftCardBaskets.Engines
                         best = new List<Basket> { mutant.Clone() };
                     }
                 }
+                allElites.AddRange(mutants);
+                allElites = allElites.Distinct().OrderByDescending(b => b.NetProfit).Take(_eliteTake * 2).ToList();
             }
 
             LogAdaptiveSessionResults(stratNames, stratUsage, runLog, bestProfit);
@@ -177,6 +220,7 @@ namespace GiftCardBaskets.Engines
 
             return best ?? new List<Basket>();
         }
+
         private List<Basket> EvolveBaskets(List<Basket> elite, List<Game> catalogue, Random rand, int offspringCount = 10)
         {
             var offspring = new List<Basket>();
@@ -202,7 +246,7 @@ namespace GiftCardBaskets.Engines
                 }
             }
 
-            // Krzyżowanie - mieszanie dwóch koszyków (średni z 2 rodziców)
+            // Krzyżowanie - mieszanie dwóch koszyków
             for (int c = 0; c < offspringCount; c++)
             {
                 var p1 = elite[rand.Next(elite.Count)];
@@ -229,7 +273,6 @@ namespace GiftCardBaskets.Engines
             Directory.CreateDirectory("history");
             File.WriteAllText($"history/session_{DateTime.UtcNow:yyyyMMddHHmmssfff}.json", json);
         }
-
         // ======================== STRATEGIE ============================
 
         private static List<Basket> BuildProfitBaskets(List<Game> g, CancellationToken ct)

@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Builder;
+﻿using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using GiftCardEngine;
@@ -13,15 +13,27 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Logging
 builder.Logging.ClearProviders().AddConsole();
-
 // Services
 builder.Services.AddSingleton<IEngineScheduler, EngineScheduler>();
 builder.Services.AddSingleton<IResultRepository, ResultRepository>();
 builder.Services.AddSingleton<IAdaptiveStrategyScorer, AdaptiveStrategyScorer>();
 builder.Services.AddHostedService<EngineBackgroundService>();
 builder.Services.AddSingleton<EngineTrainerResultsHolder>();
+// Tymczasowe rozwiązanie: rejestruj pustą listę lub z danymi testowymi.
+var cataloguePath = Path.Combine(AppContext.BaseDirectory, "catalogue.json");
+builder.Services.AddSingleton<List<Game>>(sp =>
+{
+    if (File.Exists(cataloguePath))
+    {
+        return GameLoader.Load(cataloguePath);
+    }
+    return new List<Game>();
+});
 
-    builder.Services.AddHostedService<EngineContinuousTrainerService>(sp =>
+// REJESTRACJA TWOJEGO SILNIKA:
+builder.Services.AddSingleton<ProfitPlannerHybrid>();
+
+builder.Services.AddHostedService<EngineContinuousTrainerService>(sp =>
 {
     var engine = sp.GetRequiredService<ProfitPlannerHybrid>();
     var results = sp.GetRequiredService<EngineTrainerResultsHolder>();
@@ -29,6 +41,7 @@ builder.Services.AddSingleton<EngineTrainerResultsHolder>();
     var catalogue = sp.GetRequiredService<List<Game>>();
     return new EngineContinuousTrainerService(engine, results, logger, workers: 2, dailyLimit: 50, catalogue);
 });
+
 var app = builder.Build();
 
 app.MapGet("/health", () => Results.Ok(new { status = "OK", ts = DateTime.UtcNow }));

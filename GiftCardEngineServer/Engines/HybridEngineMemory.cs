@@ -47,5 +47,14 @@ namespace GiftCardBaskets.Engines
         }
 
         public Dictionary<string, StrategyStats> GetAllStats() => _stats;
+
+        public void TrimStats(int maxItems)
+        {
+            while (_stats.Count > maxItems)
+            {
+                var keyToRemove = _stats.OrderBy(x => x.Value.Runs).First().Key;
+                _stats.Remove(keyToRemove);
+            }
+        }
     }
 }
