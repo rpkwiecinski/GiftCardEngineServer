@@ -1,10 +1,11 @@
 ﻿using GiftCardEngine.Models;
-using System.Collections.Concurrent;
+using System.Collections.Generic;
 
-namespace GiftCardEngine.Services;
-
-public interface IAdaptiveStrategyScorer
+namespace GiftCardEngine.Services
 {
-    void UpdateWithResult(EngineRunResult result);
-    object GetBestStrategies();
+    public interface IAdaptiveStrategyScorer
+    {
+        void UpdateWithResult(EngineRunResult result);
+        List<KeyValuePair<string, int>> GetBestStrategies();
+    }
 }

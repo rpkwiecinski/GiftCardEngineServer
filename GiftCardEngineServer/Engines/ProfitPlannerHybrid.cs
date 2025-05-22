@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using GiftCardBaskets.Core;
+using GiftCardEngine.Models;
 
 namespace GiftCardBaskets.Engines
 {
@@ -694,6 +695,11 @@ namespace GiftCardBaskets.Engines
                 list[i] = list[j];
                 list[j] = temp;
             }
+        }
+        public Dictionary<string, StrategyStats> GetStrategyDetailedStats()
+        {
+            // Zwróć referencje do statystyk ze swojej pamięci RL/statów
+            return _memory.GetAllStats();
         }
 
         private static PlannerResult BuildCalendar(List<Basket> all, int workers, int dailyLimit)

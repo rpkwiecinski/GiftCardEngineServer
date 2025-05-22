@@ -1,18 +1,11 @@
-﻿using System;
+﻿using GiftCardEngine.Models;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 
 namespace GiftCardBaskets.Engines
 {
-    public class StrategyStats
-    {
-        public string Strategy { get; set; }
-        public decimal BestProfit { get; set; }
-        public decimal AvgProfit { get; set; }
-        public int Runs { get; set; }
-        public int SuccessRuns { get; set; }
-    }
 
     public class HybridEngineMemory
     {

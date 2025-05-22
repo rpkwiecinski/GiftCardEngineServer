@@ -9,5 +9,7 @@ public interface IEngineScheduler
     Task ProcessQueueAsync(CancellationToken cancellationToken);
 
     Task<EngineJobResult> RunJobAsync(EngineJobRequest req);
-    object GetStatus();
+   // object GetStatus();
+    EngineStatus GetStatus();
+
 }

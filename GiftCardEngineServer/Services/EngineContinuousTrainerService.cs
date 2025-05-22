@@ -6,11 +6,12 @@ using GiftCardBaskets.Core;
 using GiftCardBaskets.Engines;
 using System.Collections.Generic;
 using GiftCardEngine.Models;
+using GiftCardEngine.Services;
 
 public sealed class EngineContinuousTrainerService : BackgroundService
 {
     private readonly ProfitPlannerHybrid _engine;
-    private readonly EngineTrainerResultsHolder _results;
+    private readonly IResultRepository _results;
     private readonly ILogger<EngineContinuousTrainerService> _logger;
     private readonly int _workers;
     private readonly int _dailyLimit;
@@ -18,7 +19,7 @@ public sealed class EngineContinuousTrainerService : BackgroundService
 
     public EngineContinuousTrainerService(
         ProfitPlannerHybrid engine,
-        EngineTrainerResultsHolder results,
+        IResultRepository results,
         ILogger<EngineContinuousTrainerService> logger,
         int workers,
         int dailyLimit,
@@ -50,10 +51,12 @@ public sealed class EngineContinuousTrainerService : BackgroundService
                     EngineTag = _engine.Name,
                     Catalogue = _catalogue.Select(x => x.Clone()).ToList(),
                     Baskets = baskets,
-                    PlannerResult = _engine.Plan
+                    PlannerResult = _engine.Plan,
+                    Timestamp = DateTime.UtcNow,
+                    Job = new EngineJobRequest { JobName = "continuous" }
                 };
 
-                _results.SetResult(result);
+                _results.SaveResult(result);
                 _logger.LogInformation("Continuous learning: New engine result updated [{Time}]", DateTime.UtcNow);
             }
             catch (Exception ex)

@@ -1,42 +1,55 @@
-﻿using Microsoft.AspNetCore.Builder;
+﻿using System.Text.Json;
+using GiftCardBaskets.Core;
+using System.Collections.Generic;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using GiftCardEngine;
 using GiftCardEngine.Services;
 using GiftCardEngine.Models;
 using Microsoft.AspNetCore.Mvc;
-using GiftCardBaskets.Core;
 using GiftCardBaskets.Engines;
+using System.IO;
+
+// Load games from catalogue.json
+var cataloguePath = Path.Combine(AppContext.BaseDirectory, "catalogue.json");
+List<Game> games;
+
+if (File.Exists(cataloguePath))
+{
+    var json = File.ReadAllText(cataloguePath);
+    games = JsonSerializer.Deserialize<List<Game>>(json, new JsonSerializerOptions
+    {
+        PropertyNameCaseInsensitive = true
+    }) ?? new List<Game>();
+}
+else
+{
+    games = new List<Game>();
+}
 
 var builder = WebApplication.CreateBuilder(args);
-//builder.WebHost.UseUrls("http://*:5000", "https://*:5001");
 
 // Logging
 builder.Logging.ClearProviders().AddConsole();
+
 // Services
 builder.Services.AddSingleton<IEngineScheduler, EngineScheduler>();
 builder.Services.AddSingleton<IResultRepository, ResultRepository>();
 builder.Services.AddSingleton<IAdaptiveStrategyScorer, AdaptiveStrategyScorer>();
 builder.Services.AddHostedService<EngineBackgroundService>();
-builder.Services.AddSingleton<EngineTrainerResultsHolder>();
-// Tymczasowe rozwiązanie: rejestruj pustą listę lub z danymi testowymi.
-var cataloguePath = Path.Combine(AppContext.BaseDirectory, "catalogue.json");
-builder.Services.AddSingleton<List<Game>>(sp =>
-{
-    if (File.Exists(cataloguePath))
-    {
-        return GameLoader.Load(cataloguePath);
-    }
-    return new List<Game>();
-});
 
-// REJESTRACJA TWOJEGO SILNIKA:
+// Register the loaded games
+builder.Services.AddSingleton<List<Game>>(games);
+
+// Register your engine
 builder.Services.AddSingleton<ProfitPlannerHybrid>();
 
+// Register continuous trainer service - używamy ResultRepository zamiast EngineTrainerResultsHolder
 builder.Services.AddHostedService<EngineContinuousTrainerService>(sp =>
 {
     var engine = sp.GetRequiredService<ProfitPlannerHybrid>();
-    var results = sp.GetRequiredService<EngineTrainerResultsHolder>();
+    var results = sp.GetRequiredService<IResultRepository>();
     var logger = sp.GetRequiredService<ILogger<EngineContinuousTrainerService>>();
     var catalogue = sp.GetRequiredService<List<Game>>();
     return new EngineContinuousTrainerService(engine, results, logger, workers: 2, dailyLimit: 50, catalogue);
