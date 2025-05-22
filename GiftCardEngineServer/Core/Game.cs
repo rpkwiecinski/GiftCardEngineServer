@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Text.Json.Serialization;
 
 namespace GiftCardBaskets.Core
 {
@@ -17,14 +18,24 @@ namespace GiftCardBaskets.Core
         public bool FamilyExclusive { get; }
         public int MaxAllowed { get; set; }
 
-        public Game(string title, decimal price, int required, decimal profitPct, DateOnly from, DateOnly to, int rating, string? family = null, bool familyExclusive = false)
+        [JsonConstructor]
+        public Game(
+            string title,
+            decimal price,
+            int required,
+            decimal profitPct,
+            DateOnly promoFrom,
+            DateOnly promoTo,
+            int rating,
+            string? family = null,
+            bool familyExclusive = false)
         {
             Title = title;
             Price = price;
             Required = Remaining = required;
             ProfitPct = profitPct;
-            PromoFrom = from;
-            PromoTo = to;
+            PromoFrom = promoFrom;
+            PromoTo = promoTo;
             Rating = rating;
             Family = family ?? string.Empty;
             FamilyExclusive = familyExclusive;

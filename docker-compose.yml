@@ -1,0 +1,11 @@
+version: "3.8"
+services:
+  giftcardengine:
+    build:
+      context: .
+      dockerfile: GiftCardEngineServer/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: "http://+:8080"
+    ports:
+      - "8080:8080"

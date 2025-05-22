@@ -1,4 +1,4 @@
-"Title,Price,Remaining,ProfitPct,PromoFrom,PromoTo,Rating,Family,Active"
+"Title,Price,Required,ProfitPct,PromoFrom,PromoTo,Rating,Family,FamilyExclusive"
 "Mortal Kombat X,8.99,100,0.12,2025-05-20,2025-06-03,9,mk,true"
 "Mortal Kombat XL,12.98,100,0.14,2025-05-20,2025-06-03,9,mk,true"
 "Mortal Kombat X - Kombat Pack,3.71,100,0.10,2025-05-20,2025-06-03,8,mk,true"

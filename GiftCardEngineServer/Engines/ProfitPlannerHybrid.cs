@@ -15,9 +15,13 @@ namespace GiftCardBaskets.Engines
             = new PlannerResult(Array.Empty<DayPlan>(), Config.DefaultDailyCap, Config.DefaultWorkers);
 
         private Dictionary<string, int> _localStrategyScores = new();
+        private HybridEngineMemory _memory = new HybridEngineMemory();
+        private readonly string _statsPath = "history/strategy_stats.json";
 
         public ProfitPlannerHybrid()
         {
+            Directory.CreateDirectory("history");
+            _memory.Load(_statsPath);
         }
 
         public Dictionary<string, int> GetStrategyScores() => _localStrategyScores;
@@ -28,9 +32,7 @@ namespace GiftCardBaskets.Engines
             int dailyLimit,
             CancellationToken ct = default)
         {
-            int seconds = 21600;
-            int metaSwitchSeconds = 2160;
-            int metaResetSeconds = 700;
+            int seconds = 30;
 
             var strategies = new Func<List<Game>, CancellationToken, List<Basket>>[]
             {
@@ -73,32 +75,35 @@ namespace GiftCardBaskets.Engines
             var stratResults = new List<(int stratIdx, decimal profit, List<Basket> baskets)>();
             var runLog = new List<(DateTime ts, int stratIdx, decimal profit, decimal waste, int basketCount)>();
 
-            bool adaptiveMode = false;
-            int[] adaptiveOrder = null;
-            int[] adaptiveWeights = null;
-
             DateTime stopAt = DateTime.UtcNow.AddSeconds(seconds);
-            DateTime metaSwitchAt = DateTime.UtcNow.AddSeconds(metaSwitchSeconds);
-            DateTime lastScoreReset = DateTime.UtcNow;
 
             while (DateTime.UtcNow < stopAt && !ct.IsCancellationRequested)
             {
+                // --- RL: Epsilon-greedy strategy selection ---
+                double epsilon = 0.1;
                 int stratIdx;
-                if (adaptiveMode && adaptiveOrder != null && adaptiveWeights != null)
+                if (rand.NextDouble() < epsilon)
                 {
-                    int totalWeight = adaptiveWeights.Sum();
-                    int r = rand.Next(totalWeight);
-                    int accum = 0, pick = 0;
-                    for (pick = 0; pick < adaptiveOrder.Length; pick++)
-                    {
-                        accum += adaptiveWeights[pick];
-                        if (r < accum) break;
-                    }
-                    stratIdx = adaptiveOrder[pick];
+                    // Eksploracja
+                    stratIdx = rand.Next(stratCount);
                 }
                 else
                 {
-                    stratIdx = rand.Next(stratCount);
+                    // Eksploatacja: najlepsza wg statystyk
+                    var allStats = _memory.GetAllStats();
+                    decimal bestAvg = decimal.MinValue;
+                    int bestIdx = 0;
+                    for (int i = 0; i < stratCount; i++)
+                    {
+                        var name = stratNames[i];
+                        decimal avg = allStats.TryGetValue(name, out var stat) ? stat.AvgProfit : 0m;
+                        if (avg > bestAvg)
+                        {
+                            bestAvg = avg;
+                            bestIdx = i;
+                        }
+                    }
+                    stratIdx = bestIdx;
                 }
 
                 stratUsage[stratIdx]++;
@@ -120,48 +125,16 @@ namespace GiftCardBaskets.Engines
                     best = baskets.Select(x => x.Clone()).ToList();
                 }
 
-                // --- Evolutionary scoring (pseudo-learning): after every round, top3 get points ---
-                var lastRound = stratResults.TakeLast(stratCount)
-                    .OrderByDescending(x => x.profit)
-                    .Select((val, idx) => (val.stratIdx, idx)).ToList();
-
-                foreach (var (sidx, pos) in lastRound)
-                {
-                    if (pos == 0) stratScore[sidx] += 2;
-                    else if (pos == 1) stratScore[sidx] += 1;
-                }
-
-                // --- Switch to adaptive mode after metaSwitchSeconds ---
-                if (!adaptiveMode && DateTime.UtcNow >= metaSwitchAt)
-                {
-                    var topStrats = stratScore
-                        .Select((score, idx) => (score, idx))
-                        .OrderByDescending(x => x.score)
-                        .Take(3)
-                        .ToList();
-
-                    adaptiveOrder = topStrats.Select(x => x.idx).ToArray();
-                    adaptiveWeights = topStrats.Select(x => Math.Max(1, x.score)).ToArray();
-                    adaptiveMode = true;
-                }
-
-                // --- Reset scory co metaResetSeconds ---
-                if ((DateTime.UtcNow - lastScoreReset).TotalSeconds >= metaResetSeconds)
-                {
-                    Array.Clear(stratScore, 0, stratCount);
-                    runLog.Clear();
-                    stratResults.Clear();
-                    lastScoreReset = DateTime.UtcNow;
-                    if (adaptiveMode)
-                    {
-                        adaptiveMode = false;
-                        adaptiveOrder = null;
-                        adaptiveWeights = null;
-                        metaSwitchAt = DateTime.UtcNow.AddSeconds(metaSwitchSeconds);
-                    }
-                }
+                // RL: aktualizacja pamięci/statystyk
+                string strategy = stratNames[stratIdx];
+                bool success = profit > 0;
+                _memory.Update(strategy, profit, success);
             }
 
+            // Zapisz statystyki RL na końcu sesji
+            _memory.Save(_statsPath);
+
+            // ... po RL while (DateTime.UtcNow < stopAt && !ct.IsCancellationRequested)
             Plan = BuildCalendar(best ?? new List<Basket>(), workers, dailyLimit);
             LogAdaptiveSessionResults(stratNames, stratUsage, runLog, bestProfit);
 
@@ -169,7 +142,78 @@ namespace GiftCardBaskets.Engines
             for (int i = 0; i < stratNames.Length; i++)
                 _localStrategyScores[stratNames[i]] = stratScore[i];
 
+            // -- EWOLUCJA: GENETYCZNE --
+            if (stratResults.Count > 0)
+            {
+                var eliteBaskets = stratResults
+                    .OrderByDescending(x => x.profit)
+                    .Take(5)
+                    .SelectMany(x => x.baskets)
+                    .Distinct()
+                    .Take(10)
+                    .ToList();
+
+                var mutatedAndCrossed = EvolveBaskets(eliteBaskets, catalogue, rand, 10);
+
+                foreach (var mutant in mutatedAndCrossed)
+                {
+                    decimal mutantProfit = mutant.NetProfit;
+                    decimal mutantWaste = mutant.WasteValueEur;
+                    _memory.Update("EVOLVED", mutantProfit, mutantProfit > 0);
+
+                    if (mutantProfit > bestProfit)
+                    {
+                        bestProfit = mutantProfit;
+                        best = new List<Basket> { mutant.Clone() };
+                    }
+                }
+            }
+
+            LogAdaptiveSessionResults(stratNames, stratUsage, runLog, bestProfit);
+
+            _localStrategyScores = new Dictionary<string, int>();
+            for (int i = 0; i < stratNames.Length; i++)
+                _localStrategyScores[stratNames[i]] = stratScore[i];
+
             return best ?? new List<Basket>();
+        }
+        private List<Basket> EvolveBaskets(List<Basket> elite, List<Game> catalogue, Random rand, int offspringCount = 10)
+        {
+            var offspring = new List<Basket>();
+
+            // Mutacje - zamiana jednej gry na inną w koszyku
+            foreach (var parent in elite)
+            {
+                for (int m = 0; m < 2; m++) // dwa mutanty na koszyk
+                {
+                    var mutant = parent.Clone();
+                    if (mutant.Games.Count == 0) continue;
+                    int idx = rand.Next(mutant.Games.Count);
+                    var candidate = catalogue
+                        .Where(g => g.Price <= (mutant.Card - (mutant.Games.Sum(x => x.Price) - mutant.Games[idx].Price))
+                                    && g.Title != mutant.Games[idx].Title)
+                        .OrderBy(_ => rand.Next())
+                        .FirstOrDefault();
+                    if (candidate != null)
+                    {
+                        mutant.Games[idx] = candidate.Clone();
+                        offspring.Add(mutant);
+                    }
+                }
+            }
+
+            // Krzyżowanie - mieszanie dwóch koszyków (średni z 2 rodziców)
+            for (int c = 0; c < offspringCount; c++)
+            {
+                var p1 = elite[rand.Next(elite.Count)];
+                var p2 = elite[rand.Next(elite.Count)];
+                var child = new Basket(p1.Card);
+                int half = Math.Min(p1.Games.Count, p2.Games.Count) / 2;
+                child.Games.AddRange(p1.Games.Take(half).Select(g => g.Clone()));
+                child.Games.AddRange(p2.Games.Skip(half).Take(child.Card - child.Games.Sum(g => g.Price) > 0 ? p2.Games.Count - half : 0).Select(g => g.Clone()));
+                offspring.Add(child);
+            }
+            return offspring;
         }
 
         private void LogAdaptiveSessionResults(string[] stratNames, int[] usage, List<(DateTime ts, int stratIdx, decimal profit, decimal waste, int basketCount)> log, decimal bestProfit)

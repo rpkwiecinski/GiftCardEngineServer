@@ -1,16 +1,15 @@
-﻿using System.Collections.Generic;
-using System.Text.Json;
+﻿using System.Text.Json;
 using GiftCardBaskets.Core;
+using System.Collections.Generic;
 
-namespace GiftCardEngine
+public static class GameLoader
 {
-    public static class GameLoader
+    public static List<Game> Load(string path)
     {
-        public static List<Game> Load(string path)
+        var json = File.ReadAllText(path);
+        return JsonSerializer.Deserialize<List<Game>>(json, new JsonSerializerOptions
         {
-            var json = System.IO.File.ReadAllText(path);
-            return JsonSerializer.Deserialize<List<Game>>(json)
-                   ?? new List<Game>();
-        }
+            PropertyNameCaseInsensitive = true
+        }) ?? new List<Game>();
     }
 }
