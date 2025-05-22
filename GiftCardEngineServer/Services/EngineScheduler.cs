@@ -60,7 +60,7 @@ public class EngineScheduler : IEngineScheduler
     {
         // Wczytaj katalog
         var catalogue = GameLoader.Load(job.CataloguePath);
-        var engine = new ProfitPlannerHybrid(_scorer);
+        var engine = new ProfitPlannerHybrid(); 
         var baskets = await engine.BuildAsync(catalogue, job.Workers, job.DailyLimit, ct);
         return new EngineRunResult
         {
@@ -72,4 +72,5 @@ public class EngineScheduler : IEngineScheduler
             StrategiesScoring = engine.GetStrategyScores()
         };
     }
+
 }

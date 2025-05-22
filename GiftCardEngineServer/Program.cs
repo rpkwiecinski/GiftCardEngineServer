@@ -7,6 +7,7 @@ using GiftCardEngine.Models;
 using Microsoft.AspNetCore.Mvc;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.UseUrls("http://*:6000");
 
 // Logging
 builder.Logging.ClearProviders().AddConsole();
